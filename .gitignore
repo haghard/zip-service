@@ -1,0 +1,16 @@
+.DS_Store
+.gradle
+.idea
+.classpath
+.project
+.settings
+bin
+build
+target
+out
+*.iml
+*.ipr
+*.iws
+test-output
+*.class
+mods
