@@ -56,7 +56,7 @@ public class ZipService extends Verticle
 
         final JsonObject query = new JsonObject()
           .putString( "action", "select" )
-          .putString( "stmt", "SELECT * FROM product1" );
+          .putString( "stmt", "SELECT * FROM product" );
 
         logger.info( query );
 
