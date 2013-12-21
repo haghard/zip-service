@@ -14,6 +14,8 @@ import org.vertx.java.core.json.JsonObject;
 import org.vertx.java.core.logging.Logger;
 import org.vertx.java.platform.Verticle;
 
+import java.util.regex.Pattern;
+
 //https://github.com/vert-x/mod-mongo-persistor
 //http://192.168.0.143:9000/zips?city=ACMAR&state=AL
 //http://192.168.0.143:9000/zips?city=ACMAR
@@ -25,7 +27,16 @@ import org.vertx.java.platform.Verticle;
 public class ZipService extends Verticle
 {
   private int port;
+  private String ALL_PRODUCTS;
+  private String PRODUCT_BY_ID;
+
   private Logger logger;
+
+  private JsonObject config;
+
+  private static final Pattern pattern = Pattern.compile( "[\\d]+" );
+
+  private static final String RESULT_FIELD = "result";
 
   private static final String BUS_NAME = "gateway/system";
   private static final String MONGO_MODULE_NAME = "mongo-persistor";
@@ -34,89 +45,142 @@ public class ZipService extends Verticle
   private static final String VERTIX_MONGO_MODULE_NAME = "io.vertx~mod-mongo-persistor~2.1.0";
   private static final String VERTIX_JDBC_MODULE_NAME = "com.bloidonia~mod-jdbc-persistor~2.1";
 
-  public void start()
+  private void init()
   {
     logger = container.logger();
+    config = container.config();
+    logger.info( "Config :" + config.toString() );
 
-    final JsonObject config = container.config();
-    logger.info( "Config !!!!!!!!!!!!!: " + config.toString() );
+    port = config.getObject( "network-settings" ).getInteger( "port" );
 
-    final JsonObject settings = config.getObject( "network-settings" );
-
-    port = settings.getInteger( "port" );
-    logger.info( "Read config: port " + port );
+    final JsonObject sqlQueries = config.getObject( "sql-query" );
+    ALL_PRODUCTS = sqlQueries.getString( "products" );
+    PRODUCT_BY_ID = sqlQueries.getString( "productById" );
 
     initPersistors( config );
     initEventBus();
+  }
+
+  public void start()
+  {
+    init();
 
     final RouteMatcher matcher = new RouteMatcher();
 
-    matcher.get("/products", new Handler<HttpServerRequest>() {
-      public void handle( final HttpServerRequest httpRequest ) {
-
+    //http://192.168.0.143:9000/products
+    matcher.get( "/products", new Handler<HttpServerRequest>()
+    {
+      @Override
+      public void handle( final HttpServerRequest httpRequest )
+      {
         final JsonObject query = new JsonObject()
           .putString( "action", "select" )
-          .putString( "stmt", "SELECT * FROM product" );
+          .putString( "stmt", ALL_PRODUCTS );
 
         logger.info( query );
-
         vertx.eventBus().send( JDBS_MODULE_NAME, query, new Handler<Message<JsonObject>>()
         {
           @Override
-          public void handle( Message<JsonObject> event )
+          public void handle( Message<JsonObject> message )
           {
-            logger.info( "Status " + event.body().getString( "status" ) );
-            if (event.body().getString( "status" ).equalsIgnoreCase( "ok" ))
+            if ( message.body().getString( "status" ).equalsIgnoreCase( "ok" ) )
             {
-              if ( event.body().getArray( "result" ).size() > 0 )
-              {
-                final JsonObject result = event.body().getArray( "result" ).get( 0 );
-                httpRequest.response().putHeader( "Content-Type", "application/json" );
-                httpRequest.response().end( result.encodePrettily() );
-              } else {
-                httpRequest.response().end( " empty response " );
-              }
-            } else {
-              httpRequest.response().end( event.body().toString() );
+              final JsonArray result = message.body().getArray( RESULT_FIELD );
+              httpRequest.response().putHeader( "Content-Type", "application/json" );
+              httpRequest.response().end( result.encodePrettily() );
+            }
+            else
+            {
+              httpRequest.response().end( message.body().toString() );
             }
           }
-        });
+        } );
+      }
+    } );
+
+    //http://192.168.0.143:9000/product/244
+    matcher.get( "/product/:id", new Handler<HttpServerRequest>()
+    {
+      @Override
+      public void handle( final HttpServerRequest httpRequest )
+      {
+        final MultiMap params = httpRequest.params();
+        if ( params.contains( "id" ) )
+        {
+          final String productId = params.get( "id" );
+          if ( pattern.matcher( productId ).matches() )
+          {
+            final JsonArray values = new JsonArray();
+            values.add( productId );
+
+            final JsonObject query = new JsonObject()
+              .putString( "action", "select" ).putString( "stmt", PRODUCT_BY_ID )
+                .putArray( "values", values );
+
+            logger.info( query );
+            vertx.eventBus().send( JDBS_MODULE_NAME, query, new Handler<Message<JsonObject>>()
+            {
+              @Override
+              public void handle( Message<JsonObject> message )
+              {
+                logger.info( message.body() );
+                if ( message.body().getString( "status" ).equalsIgnoreCase( "ok" ) )
+                {
+                  final JsonArray result = message.body().getArray( RESULT_FIELD );
+                  httpRequest.response().putHeader( "Content-Type", "application/json" );
+                  httpRequest.response().end( result.encodePrettily() );
+                } else {
+                  httpRequest.response().end( message.body().toString() );
+                }
+              }
+            });
+          } else {
+            httpRequest.response().end( " id should be a digit: " + productId );
+          }
+        }
       }
     });
 
-    matcher.get("/zips", new Handler<HttpServerRequest>() {
-      public void handle(final HttpServerRequest req) {
+    matcher.get( "/zips", new Handler<HttpServerRequest>()
+    {
+      public void handle( final HttpServerRequest req )
+      {
 
         JsonObject json = new JsonObject();
         final MultiMap params = req.params();
 
-        if (params.size() > 0 && params.contains("state") || params.contains("city")) {
+        if ( params.size() > 0 && params.contains( "state" ) || params.contains( "city" ) )
+        {
           JsonObject matcher = new JsonObject();
-          if (params.contains("state")) {
-            matcher.putString("state", params.get("state"));
+          if ( params.contains( "state" ) )
+          {
+            matcher.putString( "state", params.get( "state" ) );
             logger.info( "find state by " + params.get( "state" ) );
           }
 
-          if (params.contains("city")) {
-            matcher.putString("city", params.get("city"));
+          if ( params.contains( "city" ) )
+          {
+            matcher.putString( "city", params.get( "city" ) );
             logger.info( "find by city " + params.get( "city" ) );
           }
 
-          json = new JsonObject().putString("collection", "zips")
-                  .putString("action", "find")
-                  .putObject("matcher", matcher);
+          json = new JsonObject().putString( "collection", "zips" )
+                  .putString( "action", "find" )
+                  .putObject( "matcher", matcher );
 
-        } else {
-          json = new JsonObject().putString("collection", "zips")
-                  .putString("action", "find")
-                  .putObject("matcher", new JsonObject());
+        }
+        else
+        {
+          json = new JsonObject().putString( "collection", "zips" )
+                  .putString( "action", "find" )
+                  .putObject( "matcher", new JsonObject() );
         }
 
         JsonObject data = new JsonObject();
-        data.putArray("results", new JsonArray());
-        vertx.eventBus().send(MONGO_MODULE_NAME, json, new ReplyHandler(req, data));
+        data.putArray( "results", new JsonArray() );
+        vertx.eventBus().send( MONGO_MODULE_NAME, json, new ReplyHandler( req, data ) );
       }
-    });
+    } );
 
     matcher.get( "/zip/:id", new Handler<HttpServerRequest>()
     {
@@ -146,18 +210,9 @@ public class ZipService extends Verticle
               req.response().end( zipId + " not exists" );
             }
           }
-        });
+        } );
       }
-    });
-
-    matcher.get( "/api", new Handler<HttpServerRequest>()
-    {
-      @Override
-      public void handle( HttpServerRequest req )
-      {
-        req.response().end( "<body> <tab>/zips/:id</tab> <tab> params: city, street</tab>  </body>" );
-      }
-    });
+    } );
 
     vertx.createHttpServer().websocketHandler( new Handler<ServerWebSocket>()
     {
@@ -173,37 +228,37 @@ public class ZipService extends Verticle
             {
               webSocket.writeTextFrame( "Hello from webSocket server" );
             }
-          });
+          } );
         }
         else
         {
           webSocket.reject();
         }
       }
-    })
-    .requestHandler( matcher )
-    .listen( port );
+    } )
+            .requestHandler( matcher )
+            .listen( port );
   }
 
   private void initPersistors( JsonObject config )
   {
-    container.deployModule( VERTIX_MONGO_MODULE_NAME, config.getObject( MONGO_MODULE_NAME ), 1 , new AsyncResultHandler<String>()
-    {
-      @Override
-      public void handle( AsyncResult<String> stringAsyncResult )
-      {
-        logger.info( VERTIX_JDBC_MODULE_NAME + " say " + stringAsyncResult.result() );
-      }
-    });
-
-    container.deployModule( VERTIX_JDBC_MODULE_NAME, config.getObject( JDBS_MODULE_NAME ), 1, new AsyncResultHandler<String>()
+    container.deployModule( VERTIX_MONGO_MODULE_NAME, config.getObject( MONGO_MODULE_NAME ), 1, new AsyncResultHandler<String>()
     {
       @Override
       public void handle( AsyncResult<String> stringAsyncResult )
       {
         logger.info( VERTIX_MONGO_MODULE_NAME + " say " + stringAsyncResult.result() );
       }
-    });
+    } );
+
+    container.deployModule( VERTIX_JDBC_MODULE_NAME, config.getObject( JDBS_MODULE_NAME ), 1, new AsyncResultHandler<String>()
+    {
+      @Override
+      public void handle( AsyncResult<String> stringAsyncResult )
+      {
+        logger.info( VERTIX_JDBC_MODULE_NAME + " say " + stringAsyncResult.result() );
+      }
+    } );
   }
 
   private void initEventBus()
@@ -216,6 +271,6 @@ public class ZipService extends Verticle
         container.logger().info( "Gateway/system from " + message.replyAddress() + " Body: " + message.body() );
         message.reply( "pong!" );
       }
-    });
+    } );
   }
 }

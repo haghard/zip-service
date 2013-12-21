@@ -11,6 +11,11 @@
         "db_name": "zipDb"
     },
 
+    "sql-query" : {
+      "products": "SELECT * FROM Product",
+      "productById": "SELECT * FROM Product WHERE Product_Id = ? "
+    },
+
     "com.bloidonia.jdbcpersistor" : {
         "address": "com.bloidonia.jdbcpersistor",
 
