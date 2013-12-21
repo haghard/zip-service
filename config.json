@@ -9,6 +9,25 @@
         "port": 27017,
         "pool_size": 10,
         "db_name": "zipDb"
+    },
+
+    "com.bloidonia.jdbcpersistor" : {
+        "address": "com.bloidonia.jdbcpersistor",
+
+        "driver": "com.mysql.jdbc.Driver",
+        "url": "jdbc:mysql://192.168.0.194/prisma?useUnicode=true&autoReconnect=true",
+        "username": "prisma-user",
+        "password": "secret",
+
+        "pmdKnownBroken" : "no",
+
+        "minpool"  : 5,
+        "maxpool"  : 20,
+        "acquire"  : 5,
+
+        "batchtimeout"       : 5000,
+        "transactiontimeout" : 10000
+
     }
 }
 

@@ -1,5 +1,7 @@
 package com.gateway.server;
 
+import org.vertx.java.core.AsyncResult;
+import org.vertx.java.core.AsyncResultHandler;
 import org.vertx.java.core.Handler;
 import org.vertx.java.core.MultiMap;
 import org.vertx.java.core.buffer.Buffer;
@@ -11,17 +13,6 @@ import org.vertx.java.core.json.JsonArray;
 import org.vertx.java.core.json.JsonObject;
 import org.vertx.java.core.logging.Logger;
 import org.vertx.java.platform.Verticle;
-
-
-/*
-import rx.Observable;
-import rx.util.functions.Action1;
-import rx.util.functions.Func1;
-import io.vertx.rxcore.RxSupport;
-import io.vertx.rxcore.java.eventbus.RxEventBus;
-import io.vertx.rxcore.java.eventbus.RxMessage;
-*/
-
 
 //https://github.com/vert-x/mod-mongo-persistor
 //http://192.168.0.143:9000/zips?city=ACMAR&state=AL
@@ -38,26 +29,60 @@ public class ZipService extends Verticle
 
   private static final String BUS_NAME = "gateway/system";
   private static final String MONGO_MODULE_NAME = "mongo-persistor";
-  private static final String VERTIX_MONGO_MODULE_NAME = "io.vertx~mod-mongo-persistor~2.1.0";
+  private static final String JDBS_MODULE_NAME = "com.bloidonia.jdbcpersistor";
 
-  //private final RxEventBus rxEventBus = new RxEventBus(vertx.eventBus());
+  private static final String VERTIX_MONGO_MODULE_NAME = "io.vertx~mod-mongo-persistor~2.1.0";
+  private static final String VERTIX_JDBC_MODULE_NAME = "com.bloidonia~mod-jdbc-persistor~2.1";
 
   public void start()
   {
     logger = container.logger();
 
     final JsonObject config = container.config();
-    logger.info( "Config: " + config.toString() );
+    logger.info( "Config !!!!!!!!!!!!!: " + config.toString() );
 
     final JsonObject settings = config.getObject( "network-settings" );
 
     port = settings.getInteger( "port" );
     logger.info( "Read config: port " + port );
 
-    initMongoPersistor( config );
+    initPersistors( config );
     initEventBus();
 
     final RouteMatcher matcher = new RouteMatcher();
+
+    matcher.get("/products", new Handler<HttpServerRequest>() {
+      public void handle( final HttpServerRequest httpRequest ) {
+
+        final JsonObject query = new JsonObject()
+          .putString( "action", "select" )
+          .putString( "stmt", "SELECT * FROM product1" );
+
+        logger.info( query );
+
+        vertx.eventBus().send( JDBS_MODULE_NAME, query, new Handler<Message<JsonObject>>()
+        {
+          @Override
+          public void handle( Message<JsonObject> event )
+          {
+            logger.info( "Status " + event.body().getString( "status" ) );
+            if (event.body().getString( "status" ).equalsIgnoreCase( "ok" ))
+            {
+              if ( event.body().getArray( "result" ).size() > 0 )
+              {
+                final JsonObject result = event.body().getArray( "result" ).get( 0 );
+                httpRequest.response().putHeader( "Content-Type", "application/json" );
+                httpRequest.response().end( result.encodePrettily() );
+              } else {
+                httpRequest.response().end( " empty response " );
+              }
+            } else {
+              httpRequest.response().end( event.body().toString() );
+            }
+          }
+        });
+      }
+    });
 
     matcher.get("/zips", new Handler<HttpServerRequest>() {
       public void handle(final HttpServerRequest req) {
@@ -125,59 +150,6 @@ public class ZipService extends Verticle
       }
     });
 
-    /*matcher.post("/rxzip/:id", new Handler<HttpServerRequest>() {
-      public void handle(final HttpServerRequest req) {
-        // first access the buffer as an observable. We do this this way, since
-        // we want to keep using the matchhandler and we can't do that with rxHttpServer
-        Observable<Buffer> reqDataObservable = RxSupport.toObservable( req );
-
-        // after we have the body, we update the element in the database
-        Observable<RxMessage<JsonObject>> updateObservable = reqDataObservable.flatMap(new Func1<Buffer, Observable<RxMessage<JsonObject>>>() {
-          @Override
-          public Observable<RxMessage<JsonObject>> call(Buffer buffer) {
-            System.out.println("buffer = " + buffer);
-            // create the message
-            JsonObject newObject = new JsonObject(buffer.getString(0, buffer.length()));
-            JsonObject matcher = new JsonObject().putString("_id", req.params().get("id"));
-            JsonObject json = new JsonObject().putString("collection", "zips")
-                    .putString("action", "update")
-                    .putObject("criteria", matcher)
-                    .putBoolean("upsert", false)
-                    .putBoolean("multi", false)
-                    .putObject("objNew", newObject);
-
-            // and return an observable
-            return rxEventBus.send("mongodb-persistor", json);
-          }
-        });
-
-        // use the previous input again, so we could see whether the update was successful.
-        Observable<RxMessage<JsonObject>> getLatestObservable = updateObservable.flatMap(new Func1<RxMessage<JsonObject>, Observable<RxMessage<JsonObject>>>() {
-          @Override
-          public Observable<RxMessage<JsonObject>> call(RxMessage<JsonObject> jsonObjectRxMessage) {
-            System.out.println("jsonObjectRxMessage = " + jsonObjectRxMessage);
-            // next we get the latest version from the database, after the update has succeeded
-            // this isn't dependent on the previous one. It just has to wait till the previous
-            // one has updated the database, but we could check whether the previous one was successfully
-            JsonObject matcher = new JsonObject().putString("_id", req.params().get("id"));
-            JsonObject json2 = new JsonObject().putString("collection", "zips")
-                    .putString("action", "find")
-                    .putObject("matcher", matcher);
-            return rxEventBus.send(MONGO_MODULE_NAME, json2);
-          }
-        });
-
-        // after we've got the latest version we return this in the response.
-        getLatestObservable.subscribe(new Action1<RxMessage<JsonObject>>() {
-          @Override
-          public void call(RxMessage<JsonObject> jsonObjectRxMessage) {
-            req.response().end(jsonObjectRxMessage.body().encodePrettily());
-          }
-        });
-      }
-    });
-    */
-
     matcher.get( "/api", new Handler<HttpServerRequest>()
     {
       @Override
@@ -213,9 +185,25 @@ public class ZipService extends Verticle
     .listen( port );
   }
 
-  private void initMongoPersistor( JsonObject config )
+  private void initPersistors( JsonObject config )
   {
-    container.deployModule( VERTIX_MONGO_MODULE_NAME, config.getObject( MONGO_MODULE_NAME ) );
+    container.deployModule( VERTIX_MONGO_MODULE_NAME, config.getObject( MONGO_MODULE_NAME ), 1 , new AsyncResultHandler<String>()
+    {
+      @Override
+      public void handle( AsyncResult<String> stringAsyncResult )
+      {
+        logger.info( VERTIX_JDBC_MODULE_NAME + " say " + stringAsyncResult.result() );
+      }
+    });
+
+    container.deployModule( VERTIX_JDBC_MODULE_NAME, config.getObject( JDBS_MODULE_NAME ), 1, new AsyncResultHandler<String>()
+    {
+      @Override
+      public void handle( AsyncResult<String> stringAsyncResult )
+      {
+        logger.info( VERTIX_MONGO_MODULE_NAME + " say " + stringAsyncResult.result() );
+      }
+    });
   }
 
   private void initEventBus()
@@ -228,6 +216,6 @@ public class ZipService extends Verticle
         container.logger().info( "Gateway/system from " + message.replyAddress() + " Body: " + message.body() );
         message.reply( "pong!" );
       }
-    } );
+    });
   }
 }

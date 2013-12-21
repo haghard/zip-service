@@ -58,6 +58,9 @@ dependencies {
   */
 
   compile  'io.vertx:mod-mongo-persistor:2.1.0'
+  compile  'com.bloidonia:mod-jdbc-persistor:2.1'
+  compile  'mysql:mysql-connector-java:5.1.26'
+
   //compile  'io.vertx:mod-rxjava:1.0.0-beta3-SNAPSHOT'
 
   // If you're creating Groovy compiled verticles you may need the following dependencies
@@ -112,4 +115,5 @@ def configurePom(def pom) {
     }
   }
 }
-//java -jar gateway-server-0.1-fat.jar -cluster -conf ../../config.json
+
+//java -jar zip-service-0.1-fat.jar -cluster -conf ../../config.json
