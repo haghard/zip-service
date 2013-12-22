@@ -48,6 +48,10 @@ install - install any jars produced to the local Maven repository (.m2)
 
  */
 
+sourceSets {
+    main.resources.srcDirs 'form'
+}
+
 dependencies {
   /*
   Add your module jar dependencies here

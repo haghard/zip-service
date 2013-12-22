@@ -1,11 +1,9 @@
 package com.gateway.server;
 
-import org.vertx.java.core.AsyncResult;
-import org.vertx.java.core.AsyncResultHandler;
-import org.vertx.java.core.Handler;
-import org.vertx.java.core.MultiMap;
+import org.vertx.java.core.*;
 import org.vertx.java.core.buffer.Buffer;
 import org.vertx.java.core.eventbus.Message;
+import org.vertx.java.core.http.HttpServerFileUpload;
 import org.vertx.java.core.http.HttpServerRequest;
 import org.vertx.java.core.http.RouteMatcher;
 import org.vertx.java.core.http.ServerWebSocket;
@@ -13,7 +11,7 @@ import org.vertx.java.core.json.JsonArray;
 import org.vertx.java.core.json.JsonObject;
 import org.vertx.java.core.logging.Logger;
 import org.vertx.java.platform.Verticle;
-
+import java.util.Map;
 import java.util.regex.Pattern;
 
 //https://github.com/vert-x/mod-mongo-persistor
@@ -34,6 +32,8 @@ public class ZipService extends Verticle
 
   private JsonObject config;
 
+  private final RouteMatcher router = new RouteMatcher();
+
   private static final Pattern pattern = Pattern.compile( "[\\d]+" );
 
   private static final String RESULT_FIELD = "result";
@@ -44,6 +44,12 @@ public class ZipService extends Verticle
 
   private static final String VERTIX_MONGO_MODULE_NAME = "io.vertx~mod-mongo-persistor~2.1.0";
   private static final String VERTIX_JDBC_MODULE_NAME = "com.bloidonia~mod-jdbc-persistor~2.1";
+
+  private static final String INDEX_PAGE = "form/index.html";
+  private static final String UPLOAD_PAGE = "form/upload.html";
+  private static final String UPLOAD_TO_DIR = "uploads/";
+
+  private final String servicePath = new java.io.File(".").getAbsolutePath().replace(".","");
 
   private void init()
   {
@@ -65,17 +71,88 @@ public class ZipService extends Verticle
   {
     init();
 
-    final RouteMatcher matcher = new RouteMatcher();
+    router.get( "/", new Handler<HttpServerRequest>()
+    {
+      @Override
+      public void handle( final HttpServerRequest req )
+      {
+        req.response().sendFile( servicePath + INDEX_PAGE );
+      }
+    } );
+
+    router.get( "/uploads", new Handler<HttpServerRequest>()
+    {
+      @Override
+      public void handle( final HttpServerRequest req )
+      {
+        req.response().sendFile( servicePath + UPLOAD_PAGE );
+      }
+    } );
+
+    router.post( "/uploads", new Handler<HttpServerRequest>()
+    {
+      @Override
+      public void handle( final HttpServerRequest req )
+      {
+        req.expectMultiPart( true );
+        req.uploadHandler( new Handler<HttpServerFileUpload>()
+        {
+          @Override
+          public void handle( final HttpServerFileUpload upload )
+          {
+            upload.exceptionHandler( new Handler<Throwable>()
+            {
+              @Override
+              public void handle( Throwable event )
+              {
+                req.response().end( "Upload failed" );
+              }
+            } );
+            upload.endHandler( new Handler<Void>()
+            {
+              @Override
+              public void handle( Void event )
+              {
+                req.response().end( "Upload successful, you should see the file in the server directory" );
+              }
+            } );
+            upload.streamToFileSystem( servicePath + UPLOAD_TO_DIR + upload.filename() );
+          }
+        } );
+      }
+    } );
+
+    router.post( "/form", new Handler<HttpServerRequest>()
+    {
+      @Override
+      public void handle( final HttpServerRequest req )
+      {
+        logger.info( "post data from form" );
+        req.response().setChunked( true );
+        req.expectMultiPart( true );
+        req.endHandler( new VoidHandler()
+        {
+          protected void handle()
+          {
+            for ( Map.Entry<String, String> entry : req.formAttributes() )
+            {
+              req.response().write( "Got attr " + entry.getKey() + " : " + entry.getValue() + "\n" );
+            }
+            req.response().end();
+          }
+        } );
+      }
+    } );
 
     //http://192.168.0.143:9000/products
-    matcher.get( "/products", new Handler<HttpServerRequest>()
+    router.get( "/products", new Handler<HttpServerRequest>()
     {
       @Override
       public void handle( final HttpServerRequest httpRequest )
       {
         final JsonObject query = new JsonObject()
-          .putString( "action", "select" )
-          .putString( "stmt", ALL_PRODUCTS );
+                .putString( "action", "select" )
+                .putString( "stmt", ALL_PRODUCTS );
 
         logger.info( query );
         vertx.eventBus().send( JDBS_MODULE_NAME, query, new Handler<Message<JsonObject>>()
@@ -88,8 +165,7 @@ public class ZipService extends Verticle
               final JsonArray result = message.body().getArray( RESULT_FIELD );
               httpRequest.response().putHeader( "Content-Type", "application/json" );
               httpRequest.response().end( result.encodePrettily() );
-            }
-            else
+            } else
             {
               httpRequest.response().end( message.body().toString() );
             }
@@ -99,7 +175,7 @@ public class ZipService extends Verticle
     } );
 
     //http://192.168.0.143:9000/product/244
-    matcher.get( "/product/:id", new Handler<HttpServerRequest>()
+    router.get( "/product/:id", new Handler<HttpServerRequest>()
     {
       @Override
       public void handle( final HttpServerRequest httpRequest )
@@ -114,8 +190,8 @@ public class ZipService extends Verticle
             values.add( productId );
 
             final JsonObject query = new JsonObject()
-              .putString( "action", "select" ).putString( "stmt", PRODUCT_BY_ID )
-                .putArray( "values", values );
+                    .putString( "action", "select" ).putString( "stmt", PRODUCT_BY_ID )
+                    .putArray( "values", values );
 
             logger.info( query );
             vertx.eventBus().send( JDBS_MODULE_NAME, query, new Handler<Message<JsonObject>>()
@@ -129,19 +205,21 @@ public class ZipService extends Verticle
                   final JsonArray result = message.body().getArray( RESULT_FIELD );
                   httpRequest.response().putHeader( "Content-Type", "application/json" );
                   httpRequest.response().end( result.encodePrettily() );
-                } else {
+                } else
+                {
                   httpRequest.response().end( message.body().toString() );
                 }
               }
-            });
-          } else {
+            } );
+          } else
+          {
             httpRequest.response().end( " id should be a digit: " + productId );
           }
         }
       }
-    });
+    } );
 
-    matcher.get( "/zips", new Handler<HttpServerRequest>()
+    router.get( "/zips", new Handler<HttpServerRequest>()
     {
       public void handle( final HttpServerRequest req )
       {
@@ -166,14 +244,13 @@ public class ZipService extends Verticle
 
           json = new JsonObject().putString( "collection", "zips" )
                   .putString( "action", "find" )
-                  .putObject( "matcher", matcher );
+                  .putObject( "router", matcher );
 
-        }
-        else
+        } else
         {
           json = new JsonObject().putString( "collection", "zips" )
                   .putString( "action", "find" )
-                  .putObject( "matcher", new JsonObject() );
+                  .putObject( "router", new JsonObject() );
         }
 
         JsonObject data = new JsonObject();
@@ -182,7 +259,7 @@ public class ZipService extends Verticle
       }
     } );
 
-    matcher.get( "/zip/:id", new Handler<HttpServerRequest>()
+    router.get( "/zip/:id", new Handler<HttpServerRequest>()
     {
       public void handle( final HttpServerRequest req )
       {
@@ -191,7 +268,7 @@ public class ZipService extends Verticle
         final JsonObject matcher = new JsonObject().putString( "_id", zipId );
         final JsonObject json = new JsonObject().putString( "collection", "zips" )
                 .putString( "action", "find" )
-                .putObject( "matcher", matcher );
+                .putObject( "router", matcher );
 
         logger.info( "Try to find " + zipId );
         vertx.eventBus().send( MONGO_MODULE_NAME, json, new Handler<Message<JsonObject>>()
@@ -204,8 +281,7 @@ public class ZipService extends Verticle
               JsonObject result = event.body().getArray( "results" ).get( 0 );
               req.response().putHeader( "Content-Type", "application/json" );
               req.response().end( result.encodePrettily() );
-            }
-            else
+            } else
             {
               req.response().end( zipId + " not exists" );
             }
@@ -236,7 +312,7 @@ public class ZipService extends Verticle
         }
       }
     } )
-            .requestHandler( matcher )
+            .requestHandler( router )
             .listen( port );
   }
 
@@ -268,7 +344,7 @@ public class ZipService extends Verticle
       @Override
       public void handle( Message<String> message )
       {
-        container.logger().info( "Gateway/system from " + message.replyAddress() + " Body: " + message.body() );
+        container.logger().info( BUS_NAME + "from " + message.replyAddress() + " Body: " + message.body() );
         message.reply( "pong!" );
       }
     } );
